@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Flash IQ</string>
+    <string name="app_description">Flash IQ is a student flashcard portal. Students sign in to review the flashcards assigned to them by subject, and administrators create, assign, edit, and delete flashcard sets for their students.</string>
+</resources>
