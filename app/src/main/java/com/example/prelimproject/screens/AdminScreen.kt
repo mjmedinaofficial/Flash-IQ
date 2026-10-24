@@ -43,10 +43,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,27 +56,39 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.prelimproject.models.Flashcard
+import com.example.prelimproject.models.FlashcardFactory
+import com.example.prelimproject.models.FlashcardViewModel
+import com.example.prelimproject.models.SubjectViewModel
+import com.example.prelimproject.models.User
+import com.example.prelimproject.models.UserViewModel
+import com.example.prelimproject.models.firebaseErrorMessage
+import com.example.prelimproject.models.newId
 import com.example.prelimproject.ui.theme.pressScale
 import com.example.prelimproject.ui.theme.pressableScale
 import com.example.prelimproject.ui.theme.rememberPressInteraction
-import com.example.prelimproject.viewmodel.CurrentUserViewModel
-import com.example.prelimproject.viewmodel.FlashcardViewModel
-import com.example.prelimproject.viewmodel.SubjectViewModel
-import com.example.prelimproject.viewmodel.UserViewModel
+import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.launch
 
 import androidx.compose.material3.ExperimentalMaterial3Api
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdminScreen(
+    editingCardId: String,
     userViewModel: UserViewModel,
-    currentUserViewModel: CurrentUserViewModel,
     subjectViewModel: SubjectViewModel,
     flashcardViewModel: FlashcardViewModel,
     onNavigateToCardList: () -> Unit,
+    onClearEditing: () -> Unit,
     onLogout: () -> Unit
 ) {
-    val currentUser = currentUserViewModel.currentUser.value
+    val currentUser = userViewModel.currentUser
+    val users by userViewModel.users.collectAsState()
+    val subjects by subjectViewModel.subjects.collectAsState()
+    val flashcards by flashcardViewModel.flashcards.collectAsState()
+    val scope = rememberCoroutineScope()
+    var errorText by remember { mutableStateOf("") }
 
     var isAdmin = false
     if (currentUser != null) {
@@ -83,50 +97,132 @@ fun AdminScreen(
         }
     }
 
-    val studentList = userViewModel.getStudentList()
-    val currentEditId = flashcardViewModel.editingCardId.value
+    val studentList = mutableListOf<User>()
+    for (user in users) {
+        if (user.role != "ADMIN") {
+            studentList.add(user)
+        }
+    }
 
-    var initialQuestion = ""
-    var initialAnswer = ""
-    var initialSubjectId = if (subjectViewModel.subjects.isNotEmpty()) subjectViewModel.subjects[0].id else ""
-    val initialStudentIds = mutableListOf<String>()
+    val editingCard = flashcards.firstOrNull { it.id == editingCardId }
 
-    if (currentEditId != "") {
-        for (card in flashcardViewModel.flashcards) {
-            if (card.id == currentEditId) {
-                initialQuestion = card.question
-                initialAnswer = card.answer
-                initialSubjectId = card.subjectId
-                for (id in card.assignedUserIds) {
-                    initialStudentIds.add(id)
-                }
+    var inputQuestion by remember(editingCardId) { mutableStateOf("") }
+    var inputAnswer by remember(editingCardId) { mutableStateOf("") }
+    var selectedSubjectId by remember(editingCardId) { mutableStateOf("") }
+    val selectedStudentIds = remember(editingCardId) { mutableStateListOf<String>() }
+
+    // The card arrives asynchronously from Firestore, so fill the form when it loads.
+    LaunchedEffect(editingCard) {
+        val card = editingCard
+        if (card != null) {
+            inputQuestion = card.question
+            inputAnswer = card.answer
+            selectedSubjectId = card.subjectId
+            selectedStudentIds.clear()
+            for (id in card.assignedUserIds) {
+                selectedStudentIds.add(id)
             }
         }
     }
 
-    var selectedSubjectId: String by remember(currentEditId) { mutableStateOf(initialSubjectId) }
-    var inputQuestion: String by remember(currentEditId) { mutableStateOf(initialQuestion) }
-    var inputAnswer: String by remember(currentEditId) { mutableStateOf(initialAnswer) }
-
-    val selectedStudentIds = remember(currentEditId) {
-        val newSelectedIds = mutableStateListOf<String>()
-        for (id in initialStudentIds) {
-            newSelectedIds.add(id)
-        }
-        newSelectedIds
+    val effectiveSubjectId = if (selectedSubjectId != "") {
+        selectedSubjectId
+    } else {
+        subjects.firstOrNull()?.id ?: ""
     }
+    val selectedSubjectTitle = subjects.firstOrNull { it.id == effectiveSubjectId }?.title ?: "Select subject"
 
     var newSubjectTitle by remember { mutableStateOf("") }
     var newSubjectDesc by remember { mutableStateOf("") }
     var newUserUsername by remember { mutableStateOf("") }
     var newUserPassword by remember { mutableStateOf("") }
 
-    var selectedSection by remember {
-        mutableStateOf(if (currentEditId != "") "flashcard" else null)
-    }
-    androidx.compose.runtime.LaunchedEffect(currentEditId) {
-        if (currentEditId != "") {
+    var selectedSection by remember { mutableStateOf(if (editingCardId != "") "flashcard" else null) }
+    LaunchedEffect(editingCardId) {
+        if (editingCardId != "") {
             selectedSection = "flashcard"
+        }
+    }
+
+    fun saveFlashcard() {
+        if (inputQuestion == "" || inputAnswer == "") {
+            errorText = "A question and an answer are required."
+            return
+        }
+        if (effectiveSubjectId == "") {
+            errorText = "Create a subject before saving a card."
+            return
+        }
+        val card = FlashcardFactory.create(
+            subjectId = effectiveSubjectId,
+            question = inputQuestion,
+            answer = inputAnswer,
+            assignedUserIds = selectedStudentIds.toList(),
+            hint = editingCard?.hint ?: "",
+            id = if (editingCardId != "") editingCardId else newId(),
+            createdAt = editingCard?.createdAt ?: System.currentTimeMillis()
+        )
+        scope.launch {
+            flashcardViewModel.save(card)
+                .onSuccess {
+                    inputQuestion = ""
+                    inputAnswer = ""
+                    selectedSubjectId = ""
+                    selectedStudentIds.clear()
+                    errorText = ""
+                    if (editingCardId != "") onClearEditing()
+                }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
+        }
+    }
+
+    fun addSubject(title: String, description: String) {
+        scope.launch {
+            subjectViewModel.add(title, description)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
+        }
+    }
+
+    fun renameSubject(id: String, title: String) {
+        scope.launch {
+            subjectViewModel.rename(id, title)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
+        }
+    }
+
+    /** Deleting a subject also deletes the cards that belong to it. */
+    fun removeSubject(id: String) {
+        scope.launch {
+            subjectViewModel.remove(id)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
+        }
+    }
+
+    fun addUser(username: String, password: String) {
+        scope.launch {
+            userViewModel.addStudent(username, password)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
+        }
+    }
+
+    fun renameUser(id: String, username: String) {
+        scope.launch {
+            userViewModel.rename(id, username)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
+        }
+    }
+
+    /** Deleting a student also removes them from every card they were assigned. */
+    fun removeUser(id: String) {
+        scope.launch {
+            userViewModel.remove(id)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
         }
     }
 
@@ -177,6 +273,15 @@ fun AdminScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Spacer(modifier = Modifier.height(16.dp))
+
+                if (errorText != "") {
+                    Text(
+                        text = errorText,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
                 // Header with back when in a section
                 if (selectedSection != null) {
                     Row(
@@ -184,8 +289,8 @@ fun AdminScreen(
                     ) {
                         FilledTonalButton(
                             onClick = {
-                                if (currentEditId != "") {
-                                    flashcardViewModel.clearEditing()
+                                if (editingCardId != "") {
+                                    onClearEditing()
                                     inputQuestion = ""
                                     inputAnswer = ""
                                     selectedStudentIds.clear()
@@ -200,7 +305,7 @@ fun AdminScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = when (selectedSection) {
-                                "flashcard" -> if (currentEditId == "") "Create Flashcard" else "Edit Flashcard"
+                                "flashcard" -> if (editingCardId == "") "Create Flashcard" else "Edit Flashcard"
                                 "subjects" -> "Manage Subjects"
                                 "users" -> "Manage Users"
                                 else -> "Admin Panel"
@@ -258,7 +363,7 @@ fun AdminScreen(
                         AdminHubCard(
                             icon = Icons.AutoMirrored.Filled.ViewList,
                             title = "View All Flashcards",
-                            description = "Browse, assign, edit, and delete every card. (" + flashcardViewModel.flashcards.size + ")",
+                            description = "Browse, assign, edit, and delete every card. (" + flashcards.size + ")",
                             containerColor = hubBlocks[3].first,
                             contentColor = hubBlocks[3].second,
                             onClick = onNavigateToCardList
@@ -283,191 +388,168 @@ fun AdminScreen(
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { it / 6 }),
                     exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it / 6 })
                 ) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.large,
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.large,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(
-                                        text = "Subject",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    var subjectExpanded by remember { mutableStateOf(false) }
-                                    val selectedSubjectTitle = subjectViewModel.getSubjectTitle(selectedSubjectId)
-                                    ExposedDropdownMenuBox(
-                                        expanded = subjectExpanded,
-                                        onExpandedChange = { subjectExpanded = it }
-                                    ) {
-                                        OutlinedTextField(
-                                            value = selectedSubjectTitle,
-                                            onValueChange = {},
-                                            readOnly = true,
-                                            label = { Text("Select subject") },
-                                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = subjectExpanded) },
-                                            shape = MaterialTheme.shapes.large,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .menuAnchor(androidx.compose.material3.ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)                                        )
-                                        ExposedDropdownMenu(
-                                            expanded = subjectExpanded,
-                                            onDismissRequest = { subjectExpanded = false }
-                                        ) {
-                                            for (subject in subjectViewModel.subjects) {
-                                                DropdownMenuItem(
-                                                    text = { Text(subject.title) },
-                                                    onClick = {
-                                                        selectedSubjectId = subject.id
-                                                        subjectExpanded = false
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-
-                                OutlinedTextField(
-                                    value = inputQuestion,
-                                    onValueChange = { newValue -> inputQuestion = newValue },
-                                    label = { Text("Question") },
-                                    shape = MaterialTheme.shapes.large,
-                                    minLines = 2,
-                                    modifier = Modifier.fillMaxWidth()
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Subject",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
-
-                                OutlinedTextField(
-                                    value = inputAnswer,
-                                    onValueChange = { newValue -> inputAnswer = newValue },
-                                    label = { Text("Answer") },
-                                    shape = MaterialTheme.shapes.large,
-                                    minLines = 2,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(
-                                        text = "Assign to students",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    if (studentList.isEmpty()) {
-                                        Text(
-                                            text = "No students registered yet.",
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    } else {
-                                        var studentSearch by remember { mutableStateOf("") }
-                                        OutlinedTextField(
-                                            value = studentSearch,
-                                            onValueChange = { studentSearch = it },
-                                            label = { Text("Search students") },
-                                            shape = MaterialTheme.shapes.large,
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        val filteredStudents = studentList.filter {
-                                            it.username.contains(studentSearch, ignoreCase = true)
-                                        }
-                                        Column(
-                                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                                            modifier = Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())
-                                        ) {
-                                            for (student in filteredStudents) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                ) {
-                                                    Checkbox(
-                                                        checked = selectedStudentIds.contains(student.id),
-                                                        onCheckedChange = { isChecked ->
-                                                            if (isChecked) {
-                                                                if (!selectedStudentIds.contains(student.id)) {
-                                                                    selectedStudentIds.add(student.id)
-                                                                }
-                                                            } else {
-                                                                selectedStudentIds.remove(student.id)
-                                                            }
-                                                        }
-                                                    )
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text(text = student.username, fontSize = 14.sp)
-                                                }
-                                            }
-                                            if (filteredStudents.isEmpty()) {
-                                                Text(
-                                                    text = "No matching students.",
-                                                    fontSize = 13.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Button(
-                                    onClick = {
-                                        if (inputQuestion != "" && inputAnswer != "") {
-                                            if (currentEditId == "") {
-                                                flashcardViewModel.addFlashcard(
-                                                    selectedSubjectId,
-                                                    inputQuestion,
-                                                    inputAnswer,
-                                                    selectedStudentIds.toList()
-                                                )
-                                            } else {
-                                                flashcardViewModel.editFlashcard(
-                                                    currentEditId,
-                                                    selectedSubjectId,
-                                                    inputQuestion,
-                                                    inputAnswer,
-                                                    selectedStudentIds.toList()
-                                                )
-                                                flashcardViewModel.clearEditing()
-                                            }
-                                            inputQuestion = ""
-                                            inputAnswer = ""
-                                            selectedStudentIds.clear()
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(56.dp)
+                                var subjectExpanded by remember { mutableStateOf(false) }
+                                ExposedDropdownMenuBox(
+                                    expanded = subjectExpanded,
+                                    onExpandedChange = { subjectExpanded = it }
                                 ) {
-                                    Text(
-                                        text = if (currentEditId == "") "Save Flashcard" else "Save Changes",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
+                                    OutlinedTextField(
+                                        value = selectedSubjectTitle,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("Select subject") },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = subjectExpanded) },
+                                        shape = MaterialTheme.shapes.large,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .menuAnchor(androidx.compose.material3.ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
                                     )
-                                }
-
-                                if (currentEditId != "") {
-                                    OutlinedButton(
-                                        onClick = {
-                                            flashcardViewModel.clearEditing()
-                                            inputQuestion = ""
-                                            inputAnswer = ""
-                                            selectedStudentIds.clear()
-                                        },
-                                        modifier = Modifier.fillMaxWidth()
+                                    ExposedDropdownMenu(
+                                        expanded = subjectExpanded,
+                                        onDismissRequest = { subjectExpanded = false }
                                     ) {
-                                        Text(text = "Cancel Edit", fontSize = 15.sp)
+                                        for (subject in subjects) {
+                                            DropdownMenuItem(
+                                                text = { Text(subject.title) },
+                                                onClick = {
+                                                    selectedSubjectId = subject.id
+                                                    subjectExpanded = false
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+
+                            OutlinedTextField(
+                                value = inputQuestion,
+                                onValueChange = { newValue -> inputQuestion = newValue },
+                                label = { Text("Question") },
+                                shape = MaterialTheme.shapes.large,
+                                minLines = 2,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = inputAnswer,
+                                onValueChange = { newValue -> inputAnswer = newValue },
+                                label = { Text("Answer") },
+                                shape = MaterialTheme.shapes.large,
+                                minLines = 2,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Assign to students",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                if (studentList.isEmpty()) {
+                                    Text(
+                                        text = "No students registered yet.",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    var studentSearch by remember { mutableStateOf("") }
+                                    OutlinedTextField(
+                                        value = studentSearch,
+                                        onValueChange = { studentSearch = it },
+                                        label = { Text("Search students") },
+                                        shape = MaterialTheme.shapes.large,
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    val filteredStudents = studentList.filter {
+                                        it.username.contains(studentSearch, ignoreCase = true)
+                                    }
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())
+                                    ) {
+                                        for (student in filteredStudents) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Checkbox(
+                                                    checked = selectedStudentIds.contains(student.id),
+                                                    onCheckedChange = { isChecked ->
+                                                        if (isChecked) {
+                                                            if (!selectedStudentIds.contains(student.id)) {
+                                                                selectedStudentIds.add(student.id)
+                                                            }
+                                                        } else {
+                                                            selectedStudentIds.remove(student.id)
+                                                        }
+                                                    }
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(text = student.username, fontSize = 14.sp)
+                                            }
+                                        }
+                                        if (filteredStudents.isEmpty()) {
+                                            Text(
+                                                text = "No matching students.",
+                                                fontSize = 13.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Button(
+                                onClick = { saveFlashcard() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp)
+                            ) {
+                                Text(
+                                    text = if (editingCardId == "") "Save Flashcard" else "Save Changes",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            if (editingCardId != "") {
+                                OutlinedButton(
+                                    onClick = {
+                                        onClearEditing()
+                                        inputQuestion = ""
+                                        inputAnswer = ""
+                                        selectedStudentIds.clear()
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(text = "Cancel Edit", fontSize = 15.sp)
+                                }
+                            }
                         }
+                    }
                 }
 
                 AnimatedVisibility(
@@ -475,94 +557,92 @@ fun AdminScreen(
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { it / 6 }),
                     exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it / 6 })
                 ) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.large,
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.large,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Text(
-                                    text = "Subjects",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                for (subject in subjectViewModel.subjects) {
-                                    var title by remember(subject.id) { mutableStateOf(subject.title) }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        OutlinedTextField(
-                                            value = title,
-                                            onValueChange = { newValue ->
-                                                title = newValue
-                                                subjectViewModel.renameSubject(subject.id, newValue)
-                                            },
-                                            label = { Text("Subject name") },
-                                            shape = MaterialTheme.shapes.large,
-                                            singleLine = true,
-                                            modifier = Modifier.weight(1f)
+                            Text(
+                                text = "Subjects",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            for (subject in subjects) {
+                                var title by remember(subject.id) { mutableStateOf(subject.title) }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = title,
+                                        onValueChange = { newValue ->
+                                            title = newValue
+                                            renameSubject(subject.id, newValue)
+                                        },
+                                        label = { Text("Subject name") },
+                                        shape = MaterialTheme.shapes.large,
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Button(
+                                        onClick = { removeSubject(subject.id) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                                            contentColor = MaterialTheme.colorScheme.onErrorContainer
                                         )
-                                        Button(
-                                            onClick = {
-                                                subjectViewModel.removeSubject(subject.id)
-                                            },
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                            )
-                                        ) {
-                                            Text("Remove", fontSize = 12.sp)
-                                        }
+                                    ) {
+                                        Text("Remove", fontSize = 12.sp)
                                     }
                                 }
+                            }
 
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
 
-                                Text(
-                                    text = "Add new subject",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                OutlinedTextField(
-                                    value = newSubjectTitle,
-                                    onValueChange = { newSubjectTitle = it },
-                                    label = { Text("Title") },
-                                    shape = MaterialTheme.shapes.large,
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                OutlinedTextField(
-                                    value = newSubjectDesc,
-                                    onValueChange = { newSubjectDesc = it },
-                                    label = { Text("Description") },
-                                    shape = MaterialTheme.shapes.large,
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Button(
-                                    onClick = {
-                                        if (newSubjectTitle != "") {
-                                            subjectViewModel.addSubject(newSubjectTitle, newSubjectDesc)
-                                            newSubjectTitle = ""
-                                            newSubjectDesc = ""
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(56.dp)
-                                ) {
-                                    Text("Add Subject", fontWeight = FontWeight.Medium)
-                                }
+                            Text(
+                                text = "Add new subject",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            OutlinedTextField(
+                                value = newSubjectTitle,
+                                onValueChange = { newSubjectTitle = it },
+                                label = { Text("Title") },
+                                shape = MaterialTheme.shapes.large,
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = newSubjectDesc,
+                                onValueChange = { newSubjectDesc = it },
+                                label = { Text("Description") },
+                                shape = MaterialTheme.shapes.large,
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Button(
+                                onClick = {
+                                    if (newSubjectTitle != "") {
+                                        addSubject(newSubjectTitle, newSubjectDesc)
+                                        newSubjectTitle = ""
+                                        newSubjectDesc = ""
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp)
+                            ) {
+                                Text("Add Subject", fontWeight = FontWeight.Medium)
                             }
                         }
+                    }
                 }
 
                 AnimatedVisibility(
@@ -570,103 +650,99 @@ fun AdminScreen(
                     enter = fadeIn() + slideInHorizontally(initialOffsetX = { it / 6 }),
                     exit = fadeOut() + slideOutHorizontally(targetOffsetX = { -it / 6 })
                 ) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.large,
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.large,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
+                            Text(
+                                text = "Students",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (studentList.isEmpty()) {
                                 Text(
-                                    text = "Students",
+                                    text = "No students registered yet.",
                                     fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                if (userViewModel.getStudentList().isEmpty()) {
-                                    Text(
-                                        text = "No students registered yet.",
-                                        fontSize = 13.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            for (user in studentList) {
+                                var username by remember(user.id) { mutableStateOf(user.username) }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = username,
+                                        onValueChange = { newValue ->
+                                            username = newValue
+                                            renameUser(user.id, newValue)
+                                        },
+                                        label = { Text("Username") },
+                                        shape = MaterialTheme.shapes.large,
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
                                     )
-                                }
-                                for (user in userViewModel.users) {
-                                    if (user.role == "ADMIN") continue
-                                    var username by remember(user.id) { mutableStateOf(user.username) }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        OutlinedTextField(
-                                            value = username,
-                                            onValueChange = { newValue ->
-                                                username = newValue
-                                                userViewModel.renameUser(user.id, newValue)
-                                            },
-                                            label = { Text("Username") },
-                                            shape = MaterialTheme.shapes.large,
-                                            singleLine = true,
-                                            modifier = Modifier.weight(1f)
+                                    Button(
+                                        onClick = { removeUser(user.id) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                                            contentColor = MaterialTheme.colorScheme.onErrorContainer
                                         )
-                                        Button(
-                                            onClick = {
-                                                userViewModel.removeUser(user.id)
-                                                flashcardViewModel.removeUserFromAssignments(user.id)
-                                            },
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                            )
-                                        ) {
-                                            Text("Remove", fontSize = 12.sp)
-                                        }
+                                    ) {
+                                        Text("Remove", fontSize = 12.sp)
                                     }
                                 }
+                            }
 
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
 
-                                Text(
-                                    text = "Add new student",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                OutlinedTextField(
-                                    value = newUserUsername,
-                                    onValueChange = { newUserUsername = it },
-                                    label = { Text("Username") },
-                                    shape = MaterialTheme.shapes.large,
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                OutlinedTextField(
-                                    value = newUserPassword,
-                                    onValueChange = { newUserPassword = it },
-                                    label = { Text("Password") },
-                                    shape = MaterialTheme.shapes.large,
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Button(
-                                    onClick = {
-                                        if (newUserUsername != "" && newUserPassword != "") {
-                                            userViewModel.addUser(newUserUsername, newUserPassword)
-                                            newUserUsername = ""
-                                            newUserPassword = ""
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(56.dp)
-                                ) {
-                                    Text("Add User", fontWeight = FontWeight.Medium)
-                                }
+                            Text(
+                                text = "Add new student",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            OutlinedTextField(
+                                value = newUserUsername,
+                                onValueChange = { newUserUsername = it },
+                                label = { Text("Username") },
+                                shape = MaterialTheme.shapes.large,
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = newUserPassword,
+                                onValueChange = { newUserPassword = it },
+                                label = { Text("Password") },
+                                shape = MaterialTheme.shapes.large,
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Button(
+                                onClick = {
+                                    if (newUserUsername != "" && newUserPassword != "") {
+                                        addUser(newUserUsername, newUserPassword)
+                                        newUserUsername = ""
+                                        newUserPassword = ""
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp)
+                            ) {
+                                Text("Add User", fontWeight = FontWeight.Medium)
                             }
                         }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -701,7 +777,7 @@ private fun AdminHubCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                androidx.compose.foundation.layout.Box(
+                Box(
                     modifier = Modifier
                         .width(52.dp)
                         .height(52.dp)

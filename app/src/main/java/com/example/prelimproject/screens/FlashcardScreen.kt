@@ -26,6 +26,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -38,12 +39,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.prelimproject.models.Flashcard
+import com.example.prelimproject.models.FlashcardViewModel
+import com.example.prelimproject.models.SubjectViewModel
+import com.example.prelimproject.models.UserViewModel
 import com.example.prelimproject.ui.theme.pressScale
 import com.example.prelimproject.ui.theme.pressableScale
 import com.example.prelimproject.ui.theme.rememberPressInteraction
-import com.example.prelimproject.viewmodel.CurrentUserViewModel
-import com.example.prelimproject.viewmodel.FlashcardViewModel
-import com.example.prelimproject.viewmodel.SubjectViewModel
 
 import androidx.compose.material3.ExperimentalMaterial3Api
 
@@ -51,12 +52,14 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun FlashcardScreen(
     subjectId: String,
-    currentUserViewModel: CurrentUserViewModel,
+    userViewModel: UserViewModel,
     subjectViewModel: SubjectViewModel,
     flashcardViewModel: FlashcardViewModel,
     onBack: () -> Unit
 ) {
-    val currentUser = currentUserViewModel.currentUser.value
+    val currentUser = userViewModel.currentUser
+    val subjects by subjectViewModel.subjects.collectAsState()
+    val flashcards by flashcardViewModel.flashcards.collectAsState()
 
     var isAdmin = false
     if (currentUser != null) {
@@ -65,10 +68,10 @@ fun FlashcardScreen(
         }
     }
 
-    val subjectTitle = subjectViewModel.getSubjectTitle(subjectId)
+    val subjectTitle = subjects.firstOrNull { it.id == subjectId }?.title ?: "Subject"
 
     val visibleCards = mutableListOf<Flashcard>()
-    for (card in flashcardViewModel.flashcards) {
+    for (card in flashcards) {
         if (card.subjectId == subjectId) {
             if (isAdmin) {
                 visibleCards.add(card)

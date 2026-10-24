@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,13 +43,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.prelimproject.models.FlashcardViewModel
+import com.example.prelimproject.models.SubjectViewModel
+import com.example.prelimproject.models.UserViewModel
+import com.example.prelimproject.models.firebaseErrorMessage
 import com.example.prelimproject.ui.theme.pressScale
 import com.example.prelimproject.ui.theme.pressableScale
 import com.example.prelimproject.ui.theme.rememberPressInteraction
-import com.example.prelimproject.viewmodel.CurrentUserViewModel
-import com.example.prelimproject.viewmodel.FlashcardViewModel
-import com.example.prelimproject.viewmodel.SubjectViewModel
-import com.example.prelimproject.viewmodel.UserViewModel
+import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.launch
 
 import androidx.compose.material3.ExperimentalMaterial3Api
 
@@ -56,18 +59,38 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun AdminCardListScreen(
     userViewModel: UserViewModel,
-    currentUserViewModel: CurrentUserViewModel,
     subjectViewModel: SubjectViewModel,
     flashcardViewModel: FlashcardViewModel,
-    onNavigateToEdit: () -> Unit,
+    onEditCard: (String) -> Unit,
     onBackToForm: () -> Unit
 ) {
-    val currentUser = currentUserViewModel.currentUser.value
+    val currentUser = userViewModel.currentUser
+    val users by userViewModel.users.collectAsState()
+    val subjects by subjectViewModel.subjects.collectAsState()
+    val flashcards by flashcardViewModel.flashcards.collectAsState()
+    val scope = rememberCoroutineScope()
+    var errorText by remember { mutableStateOf("") }
 
     var isAdmin = false
     if (currentUser != null) {
         if (currentUser.role == "ADMIN") {
             isAdmin = true
+        }
+    }
+
+    fun deleteCard(cardId: String) {
+        scope.launch {
+            flashcardViewModel.delete(cardId)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
+        }
+    }
+
+    fun unassign(cardId: String, studentId: String) {
+        scope.launch {
+            flashcardViewModel.unassign(cardId, studentId)
+                .onSuccess { errorText = "" }
+                .onFailure { error -> errorText = firebaseErrorMessage(error) }
         }
     }
 
@@ -119,10 +142,19 @@ fun AdminCardListScreen(
             ) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = flashcardViewModel.flashcards.size.toString() + " cards total",
+                    text = flashcards.size.toString() + " cards total",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                if (errorText != "") {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = errorText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -138,14 +170,14 @@ fun AdminCardListScreen(
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
                     items(
-                        flashcardViewModel.flashcards,
+                        flashcards,
                         key = { card -> card.id }
                     ) { card ->
 
-                        val cardSubjectTitle = subjectViewModel.getSubjectTitle(card.subjectId)
+                        val cardSubjectTitle = subjects.firstOrNull { it.id == card.subjectId }?.title ?: "Uncategorized"
 
                         val assignedNames = mutableListOf<String>()
-                        for (user in userViewModel.users) {
+                        for (user in users) {
                             if (card.assignedUserIds.contains(user.id)) {
                                 assignedNames.add(user.username)
                             }
@@ -173,10 +205,7 @@ fun AdminCardListScreen(
                         val cardScale = pressScale(cardPress)
 
                         Card(
-                            onClick = {
-                                flashcardViewModel.editingCardId.value = card.id
-                                onNavigateToEdit()
-                            },
+                            onClick = { onEditCard(card.id) },
                             interactionSource = cardPress,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -240,18 +269,13 @@ fun AdminCardListScreen(
                                         Spacer(modifier = Modifier.width(8.dp))
                                     }
                                     FilledTonalButton(
-                                        onClick = {
-                                            flashcardViewModel.editingCardId.value = card.id
-                                            onNavigateToEdit()
-                                        }
+                                        onClick = { onEditCard(card.id) }
                                     ) {
                                         Text(text = "Edit", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                     }
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Button(
-                                        onClick = {
-                                            flashcardViewModel.deleteFlashcard(card.id)
-                                        },
+                                        onClick = { deleteCard(card.id) },
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = MaterialTheme.colorScheme.errorContainer,
                                             contentColor = MaterialTheme.colorScheme.onErrorContainer
@@ -277,7 +301,7 @@ fun AdminCardListScreen(
                                             color = blockContent.copy(alpha = 0.8f)
                                         )
                                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                            for (user in userViewModel.users) {
+                                            for (user in users) {
                                                 if (!card.assignedUserIds.contains(user.id)) continue
                                                 Row(
                                                     verticalAlignment = Alignment.CenterVertically,
@@ -287,7 +311,7 @@ fun AdminCardListScreen(
                                                         checked = true,
                                                         onCheckedChange = { checked ->
                                                             if (!checked) {
-                                                                flashcardViewModel.toggleAssignment(card.id, user.id)
+                                                                unassign(card.id, user.id)
                                                             }
                                                         }
                                                     )

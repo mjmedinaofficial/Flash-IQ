@@ -13,3 +13,19 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Firebase config is per developer / per environment.
+app/google-services.json
+
+# Python / LeptoShield
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+data/external/weather_cache.json
+data/processed/*.db
+data/processed/*.sqlite
+data/models/*.joblib
+data/models/*.pkl
+.DS_Store

@@ -22,31 +22,35 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.prelimproject.models.FlashcardViewModel
+import com.example.prelimproject.models.SubjectViewModel
+import com.example.prelimproject.models.UserViewModel
 import com.example.prelimproject.ui.theme.pressScale
 import com.example.prelimproject.ui.theme.pressableScale
 import com.example.prelimproject.ui.theme.rememberPressInteraction
-import com.example.prelimproject.viewmodel.CurrentUserViewModel
-import com.example.prelimproject.viewmodel.FlashcardViewModel
-import com.example.prelimproject.viewmodel.SubjectViewModel
 
 import androidx.compose.material3.ExperimentalMaterial3Api
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubjectListScreen(
-    currentUserViewModel: CurrentUserViewModel,
+    userViewModel: UserViewModel,
     subjectViewModel: SubjectViewModel,
     flashcardViewModel: FlashcardViewModel,
     onSubjectClick: (String) -> Unit,
     onAdminClick: () -> Unit,
     onLogout: () -> Unit
 ) {
-    val currentUser = currentUserViewModel.currentUser.value
+    val currentUser = userViewModel.currentUser
+    val subjects by subjectViewModel.subjects.collectAsState()
+    val flashcards by flashcardViewModel.flashcards.collectAsState()
 
     var isAdmin = false
     var displayName = "User"
@@ -119,12 +123,12 @@ fun SubjectListScreen(
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
                 itemsIndexed(
-                    subjectViewModel.subjects,
+                    subjects,
                     key = { _, subject -> subject.id }
                 ) { index, subject ->
 
                     var cardCount = 0
-                    for (card in flashcardViewModel.flashcards) {
+                    for (card in flashcards) {
                         if (card.subjectId == subject.id) {
                             if (isAdmin) {
                                 cardCount = cardCount + 1

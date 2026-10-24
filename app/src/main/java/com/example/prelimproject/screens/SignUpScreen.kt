@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,19 +30,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.prelimproject.viewmodel.CurrentUserViewModel
-import com.example.prelimproject.viewmodel.UserViewModel
+import com.example.prelimproject.models.User
+import com.example.prelimproject.models.UserViewModel
+import com.example.prelimproject.models.firebaseErrorMessage
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 @Composable
 fun SignUpScreen(
     userViewModel: UserViewModel,
-    currentUserViewModel: CurrentUserViewModel,
-    onSignUpSuccess: () -> Unit,
+    onSignUpSuccess: (User) -> Unit,
     onNavigateToLogin: () -> Unit
 ) {
     var inputUser: String by remember { mutableStateOf("") }
     var inputPass: String by remember { mutableStateOf("") }
     var errorMessage: String by remember { mutableStateOf("") }
+    var isBusy: Boolean by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
         Column(
@@ -122,21 +127,35 @@ fun SignUpScreen(
                             if (inputUser == "" || inputPass == "") {
                                 errorMessage = "Please enter both fields"
                             } else {
-                                val isTaken = userViewModel.isUsernameTaken(inputUser)
-                                if (isTaken) {
-                                    errorMessage = "Username already exists"
-                                } else {
-                                    val newStudent = userViewModel.registerStudent(inputUser, inputPass)
-                                    currentUserViewModel.setCurrentUser(newStudent)
-                                    onSignUpSuccess()
+                                isBusy = true
+                                errorMessage = ""
+                                scope.launch {
+                                    try {
+                                        userViewModel.signUp(inputUser, inputPass)
+                                            .onSuccess { newStudent ->
+                                                onSignUpSuccess(newStudent)
+                                            }
+                                            .onFailure { error ->
+                                                errorMessage = firebaseErrorMessage(error)
+                                            }
+                                    } catch (error: Throwable) {
+                                        errorMessage = firebaseErrorMessage(error)
+                                    } finally {
+                                        isBusy = false
+                                    }
                                 }
                             }
                         },
+                        enabled = !isBusy,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp)
                     ) {
-                        Text(text = "Register", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            text = if (isBusy) "Creating account..." else "Register",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
