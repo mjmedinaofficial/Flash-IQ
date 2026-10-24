@@ -35,8 +35,6 @@ class FlashcardRepository(
             .update(Keys.ASSIGNED_USER_IDS, FieldValue.arrayRemove(userId))
             .await()
     }
-
-    /** Used when a student account is deleted: strips them from every card. */
     suspend fun unassignEverywhere(userId: String) {
         val assigned = collection.whereArrayContains(Keys.ASSIGNED_USER_IDS, userId).get().await()
         if (assigned.isEmpty) return
@@ -50,8 +48,6 @@ class FlashcardRepository(
         }
         batch.commit().await()
     }
-
-    /** Used when a subject is deleted: its cards go with it. */
     suspend fun deleteAllForSubject(subjectId: String) {
         val cards = collection.whereEqualTo(Keys.SUBJECT_ID, subjectId).get().await()
         if (cards.isEmpty) return

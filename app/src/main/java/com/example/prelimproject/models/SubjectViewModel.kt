@@ -20,8 +20,6 @@ class SubjectViewModel(
     suspend fun rename(id: String, title: String): Result<Unit> = runCatching {
         repository.rename(id, title)
     }
-
-    /** Removing a subject also removes its cards. */
     suspend fun remove(id: String): Result<Unit> = runCatching {
         repository.delete(id)
     }

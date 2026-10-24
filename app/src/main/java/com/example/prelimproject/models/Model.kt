@@ -55,11 +55,7 @@ data class Flashcard(
     val hint: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
-
-/** Document ids are generated from the clock, which keeps them readable. */
 fun newId(): String = System.currentTimeMillis().toString()
-
-/** Turns a Firebase failure into something worth showing on screen. */
 fun firebaseErrorMessage(error: Throwable): String {
     return when (error) {
         is FirebaseFirestoreException -> when (error.code) {
