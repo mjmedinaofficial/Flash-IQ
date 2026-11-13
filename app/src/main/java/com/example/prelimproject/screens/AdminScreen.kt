@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -54,6 +55,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.prelimproject.models.Flashcard
@@ -135,6 +139,7 @@ fun AdminScreen(
     var newSubjectTitle by remember { mutableStateOf("") }
     var newSubjectDesc by remember { mutableStateOf("") }
     var newUserUsername by remember { mutableStateOf("") }
+    var newUserEmail by remember { mutableStateOf("") }
     var newUserPassword by remember { mutableStateOf("") }
 
     var selectedSection by remember { mutableStateOf(if (editingCardId != "") "flashcard" else null) }
@@ -201,9 +206,9 @@ fun AdminScreen(
         }
     }
 
-    fun addUser(username: String, password: String) {
+    fun addUser(username: String, email: String, password: String) {
         scope.launch {
-            userViewModel.addStudent(username, password)
+            userViewModel.addStudent(username, email, password)
                 .onSuccess { errorText = "" }
                 .onFailure { error -> errorText = firebaseErrorMessage(error) }
         }
@@ -689,6 +694,9 @@ fun AdminScreen(
                                         label = { Text("Username") },
                                         shape = MaterialTheme.shapes.large,
                                         singleLine = true,
+                                        supportingText = {
+                                            if (user.email.isNotBlank()) Text(user.email)
+                                        },
                                         modifier = Modifier.weight(1f)
                                     )
                                     Button(
@@ -720,19 +728,45 @@ fun AdminScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
+                                value = newUserEmail,
+                                onValueChange = { newUserEmail = it },
+                                label = { Text("Email") },
+                                shape = MaterialTheme.shapes.large,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Email,
+                                    imeAction = ImeAction.Next
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
                                 value = newUserPassword,
                                 onValueChange = { newUserPassword = it },
                                 label = { Text("Password") },
                                 shape = MaterialTheme.shapes.large,
                                 singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Password,
+                                    imeAction = ImeAction.Done
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Button(
                                 onClick = {
-                                    if (newUserUsername != "" && newUserPassword != "") {
-                                        addUser(newUserUsername, newUserPassword)
-                                        newUserUsername = ""
-                                        newUserPassword = ""
+                                    if (newUserUsername != "" && newUserEmail != "" && newUserPassword != "") {
+                                        if (!newUserEmail.contains("@")) {
+                                            errorText = "Enter a valid email address."
+                                        } else if (newUserPassword.length < 6) {
+                                            errorText = "Password must be at least 6 characters."
+                                        } else {
+                                            addUser(newUserUsername, newUserEmail, newUserPassword)
+                                            newUserUsername = ""
+                                            newUserEmail = ""
+                                            newUserPassword = ""
+                                        }
+                                    } else {
+                                        errorText = "Fill in the username, email, and password."
                                     }
                                 },
                                 modifier = Modifier

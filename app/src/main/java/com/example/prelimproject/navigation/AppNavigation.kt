@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -29,6 +30,7 @@ import com.google.firebase.FirebaseApp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.navArgument
 import com.example.prelimproject.models.FlashcardViewModel
+import com.example.prelimproject.models.Roles
 import com.example.prelimproject.models.SubjectViewModel
 import com.example.prelimproject.models.UserViewModel
 import com.example.prelimproject.screens.AdminCardListScreen
@@ -60,19 +62,37 @@ fun AppNavigation() {
         return
     }
 
-    val navController = rememberNavController()
-    var editingCardId by remember { mutableStateOf("") }
-
     val userViewModel: UserViewModel = viewModel()
     val subjectViewModel: SubjectViewModel = viewModel()
     val flashcardViewModel: FlashcardViewModel = viewModel()
 
-    LaunchedEffect(Unit) {
-        // Seeding is best effort: the screens surface their own errors.
-        userViewModel.seedDemoDataIfNeeded()
+    // Firebase restores the persisted session on startup. Wait for the matching
+    // Firestore profile before choosing the first screen.
+    if (userViewModel.isRestoringSession) {
+        SessionLoadingScreen()
+        return
     }
 
-    NavHost(navController = navController, startDestination = Routes.LOGIN) {
+    val navController = rememberNavController()
+    var editingCardId by remember { mutableStateOf("") }
+
+    // Captured once; later sign-ins navigate explicitly from their callbacks.
+    val startDestination = remember {
+        when (userViewModel.currentUser?.role) {
+            Roles.ADMIN -> Routes.ADMIN
+            null -> Routes.LOGIN
+            else -> Routes.SUBJECTS
+        }
+    }
+
+    LaunchedEffect(userViewModel.currentUser?.id) {
+        // Seeding is best effort: the screens surface their own errors.
+        if (userViewModel.currentUser?.role == Roles.ADMIN) {
+            userViewModel.seedDemoDataIfNeeded()
+        }
+    }
+
+    NavHost(navController = navController, startDestination = startDestination) {
         composable(Routes.LOGIN) {
             LoginScreen(
                 userViewModel = userViewModel,
@@ -159,6 +179,28 @@ fun AppNavigation() {
                     editingCardId = ""
                     navController.popBackStack()
                 }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SessionLoadingScreen() {
+    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            CircularProgressIndicator()
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Restoring your session...",
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

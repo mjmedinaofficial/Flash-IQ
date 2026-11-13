@@ -1,11 +1,11 @@
 package com.example.prelimproject.models
 
 import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.firestore.FirebaseFirestoreException
 
 object Keys {
     const val USERNAME = "username"
-    const val PASSWORD = "password"
     const val ROLE = "role"
     const val DISPLAY_NAME = "displayName"
     const val EMAIL = "email"
@@ -31,7 +31,6 @@ object Roles {
 data class User(
     val id: String,
     val username: String,
-    val password: String,
     val role: String = Roles.STUDENT,
     val displayName: String = username,
     val email: String = "",
@@ -58,6 +57,21 @@ data class Flashcard(
 fun newId(): String = System.currentTimeMillis().toString()
 fun firebaseErrorMessage(error: Throwable): String {
     return when (error) {
+        is FirebaseAuthException -> when (error.errorCode) {
+            "ERROR_INVALID_EMAIL" -> "Enter a valid email address."
+            "ERROR_WRONG_PASSWORD", "ERROR_INVALID_CREDENTIAL", "ERROR_INVALID_LOGIN_CREDENTIALS" ->
+                "Incorrect email or password."
+            "ERROR_USER_NOT_FOUND" -> "No account found for that email."
+            "ERROR_EMAIL_ALREADY_IN_USE" -> "That email is already registered."
+            "ERROR_WEAK_PASSWORD" -> "Password must be at least 6 characters."
+            "ERROR_TOO_MANY_REQUESTS" -> "Too many attempts. Try again later."
+            "ERROR_USER_DISABLED" -> "This account has been disabled."
+            "ERROR_OPERATION_NOT_ALLOWED" ->
+                "Email/password sign-in is not enabled in Firebase."
+            "ERROR_NETWORK_REQUEST_FAILED" ->
+                "Cannot reach Firebase. Check your internet connection."
+            else -> error.message ?: "Authentication failed."
+        }
         is FirebaseFirestoreException -> when (error.code) {
             FirebaseFirestoreException.Code.PERMISSION_DENIED ->
                 "Firestore denied this request. Check the security rules."

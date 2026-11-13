@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class UserViewModel(
     private val repository: UserRepository = UserRepository()
@@ -16,27 +18,51 @@ class UserViewModel(
     var currentUser: User? by mutableStateOf(null)
         private set
 
+    /** True until Firebase has restored (or rejected) the persisted session. */
+    var isRestoringSession: Boolean by mutableStateOf(true)
+        private set
+
     val users: StateFlow<List<User>> =
-        repository.observeAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        repository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    suspend fun signIn(username: String, password: String): Result<User?> =
-        runCatching { repository.signIn(username, password) }
-            .onSuccess { user -> if (user != null) currentUser = user }
-
-    suspend fun signUp(username: String, password: String): Result<User> = runCatching {
-        if (repository.usernameTaken(username)) {
-            throw IllegalStateException("That username is already taken.")
+    init {
+        viewModelScope.launch {
+            repository.observeAuthState().collect { firebaseUser ->
+                if (firebaseUser == null) {
+                    currentUser = null
+                } else {
+                    val profile = runCatching {
+                        withTimeoutOrNull(8_000) {
+                            repository.findProfile(firebaseUser.uid)
+                        }
+                    }.getOrNull()
+                    if (profile != null) {
+                        currentUser = profile
+                    }
+                }
+                isRestoringSession = false
+            }
         }
-        repository.createStudent(username = username, password = password)
-    }.onSuccess { currentUser = it }
+    }
+
+    suspend fun signIn(email: String, password: String): Result<User> =
+        runCatching { repository.signIn(email, password) }
+            .onSuccess { currentUser = it }
+
+    suspend fun signUp(username: String, email: String, password: String): Result<User> =
+        runCatching { repository.signUp(username, email, password) }
+            .onSuccess { currentUser = it }
 
     fun signOut() {
+        repository.signOut()
         currentUser = null
     }
 
-    suspend fun addStudent(username: String, password: String): Result<Unit> = runCatching {
-        repository.createStudent(username = username, password = password)
-    }.map { Unit }
+    suspend fun resetPassword(email: String): Result<Unit> =
+        runCatching { repository.sendPasswordResetEmail(email) }
+
+    suspend fun addStudent(username: String, email: String, password: String): Result<Unit> =
+        runCatching { repository.createStudent(username, email, password) }.map { Unit }
 
     suspend fun rename(id: String, username: String): Result<Unit> = runCatching {
         repository.rename(id, username)

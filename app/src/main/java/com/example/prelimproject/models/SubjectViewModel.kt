@@ -11,7 +11,7 @@ class SubjectViewModel(
 ) : ViewModel() {
 
     val subjects: StateFlow<List<Subject>> =
-        repository.observeAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        repository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     suspend fun add(title: String, description: String): Result<Unit> = runCatching {
         repository.add(title = title, description = description)

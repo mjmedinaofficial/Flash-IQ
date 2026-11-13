@@ -6,7 +6,6 @@ object UserFactory {
 
     fun create(
         username: String,
-        password: String,
         role: String = Roles.STUDENT,
         displayName: String = username,
         email: String = "",
@@ -15,22 +14,30 @@ object UserFactory {
     ): User = User(
         id = id,
         username = username,
-        password = password,
         role = role,
         displayName = displayName,
         email = email,
         createdAt = createdAt
     )
 
-    fun createStudent(username: String, password: String): User =
-        create(username = username, password = password)
+    fun createStudent(
+        username: String,
+        email: String,
+        id: String = newId(),
+        createdAt: Long = System.currentTimeMillis()
+    ): User = create(
+        username = username,
+        displayName = username,
+        email = email,
+        id = id,
+        createdAt = createdAt
+    )
 
     fun fromDocument(document: DocumentSnapshot): User? {
         if (!document.exists()) return null
         return User(
             id = document.id,
             username = document.getString(Keys.USERNAME) ?: return null,
-            password = document.getString(Keys.PASSWORD) ?: "",
             role = document.getString(Keys.ROLE) ?: Roles.STUDENT,
             displayName = document.getString(Keys.DISPLAY_NAME) ?: "",
             email = document.getString(Keys.EMAIL) ?: "",
@@ -40,7 +47,6 @@ object UserFactory {
 
     fun toDocument(user: User): Map<String, Any?> = mapOf(
         Keys.USERNAME to user.username,
-        Keys.PASSWORD to user.password,
         Keys.ROLE to user.role,
         Keys.DISPLAY_NAME to user.displayName,
         Keys.EMAIL to user.email,

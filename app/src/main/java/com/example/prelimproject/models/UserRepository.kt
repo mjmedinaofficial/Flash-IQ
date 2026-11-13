@@ -1,17 +1,35 @@
 package com.example.prelimproject.models
 
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 
 class UserRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
     private val flashcards: FlashcardRepository = FlashcardRepository()
 ) {
     private val collection = db.collection(COLLECTION)
+    private val secondaryAuthMutex = Mutex()
+
+    /**
+     * Emits the signed-in Firebase user (or null) and keeps emitting across
+     * sign-in/sign-out and process restarts, since Firebase restores sessions.
+     */
+    fun observeAuthState(): Flow<FirebaseUser?> = callbackFlow {
+        val listener = FirebaseAuth.AuthStateListener { trySend(it.currentUser) }
+        auth.addAuthStateListener(listener)
+        awaitClose { auth.removeAuthStateListener(listener) }
+    }
 
     fun observeAll(): Flow<List<User>> = callbackFlow {
         val registration = collection.orderBy(Keys.CREATED_AT, Query.Direction.ASCENDING)
@@ -22,15 +40,66 @@ class UserRepository(
         awaitClose { registration.remove() }
     }
 
+    suspend fun findProfile(uid: String): User? {
+        val document = collection.document(uid).get().await()
+        return UserFactory.fromDocument(document)
+    }
+
     suspend fun findByUsername(username: String): User? {
         val documents = collection.whereEqualTo(Keys.USERNAME, username).limit(1).get().await()
         val document = documents.documents.firstOrNull() ?: return null
         return UserFactory.fromDocument(document)
     }
 
-    suspend fun signIn(username: String, password: String): User? {
-        val user = findByUsername(username) ?: return null
-        return if (user.password == password) user else null
+    suspend fun signIn(email: String, password: String): User {
+        val firebaseUser = auth.signInWithEmailAndPassword(email.trim(), password).await().user
+            ?: error("Sign in failed. Please try again.")
+
+        val profile = findProfile(firebaseUser.uid)
+        if (profile != null) return profile
+
+        // The very first account to sign in becomes the administrator. This lets
+        // an account created in the Firebase Console bootstrap the app.
+        if (collection.limit(1).get().await().isEmpty) {
+            val fallbackName = firebaseUser.email?.substringBefore("@") ?: "Admin"
+            val admin = UserFactory.create(
+                username = fallbackName,
+                role = Roles.ADMIN,
+                displayName = fallbackName,
+                email = firebaseUser.email ?: email.trim(),
+                id = firebaseUser.uid
+            )
+            create(admin)
+            return admin
+        }
+
+        throw IllegalStateException(
+            "This account has no profile. Ask an administrator to create one."
+        )
+    }
+
+    suspend fun signUp(username: String, email: String, password: String): User {
+        val firebaseUser = auth.createUserWithEmailAndPassword(email.trim(), password).await().user
+            ?: error("Could not create the account.")
+
+        // The account is signed in now, so this query is allowed by the rules.
+        if (usernameTaken(username)) {
+            runCatching { firebaseUser.delete().await() }
+            throw IllegalStateException("That username is already taken.")
+        }
+
+        return try {
+            val student = UserFactory.createStudent(
+                username = username,
+                email = email.trim(),
+                id = firebaseUser.uid
+            )
+            create(student)
+            student
+        } catch (error: Throwable) {
+            runCatching { firebaseUser.delete().await() }
+            throw error
+        }
     }
 
     suspend fun usernameTaken(username: String): Boolean = findByUsername(username) != null
@@ -39,8 +108,20 @@ class UserRepository(
         collection.document(user.id).set(UserFactory.toDocument(user)).await()
     }
 
-    suspend fun createStudent(username: String, password: String): User {
-        val student = UserFactory.createStudent(username = username, password = password)
+    /**
+     * Admin-only flow. The account is created on a secondary Firebase app so the
+     * administrator's own session is not replaced by the new student.
+     */
+    suspend fun createStudent(username: String, email: String, password: String): User {
+        if (usernameTaken(username)) {
+            throw IllegalStateException("That username is already taken.")
+        }
+        val uid = createAuthUser(email.trim(), password)
+        val student = UserFactory.createStudent(
+            username = username,
+            email = email.trim(),
+            id = uid
+        )
         create(student)
         return student
     }
@@ -56,22 +137,23 @@ class UserRepository(
         flashcards.unassignEverywhere(id)
     }
 
+    fun signOut() {
+        auth.signOut()
+    }
+
+    /**
+     * Sends Firebase's password reset email. If email enumeration protection is
+     * enabled (the default), this succeeds even when the address is unknown.
+     */
+    suspend fun sendPasswordResetEmail(email: String) {
+        auth.sendPasswordResetEmail(email.trim()).await()
+    }
+
     suspend fun seedDemoDataIfNeeded() {
-        if (!collection.limit(1).get().await().isEmpty) return
+        if (!db.collection(SUBJECTS).limit(1).get().await().isEmpty) return
 
         val now = System.currentTimeMillis()
         val batch = db.batch()
-
-        val admin = UserFactory.create(
-            username = "Admin",
-            password = "123",
-            role = Roles.ADMIN,
-            displayName = "Administrator",
-            email = "admin@flashiq.app",
-            id = "1",
-            createdAt = now
-        )
-        batch.set(collection.document(admin.id), UserFactory.toDocument(admin))
 
         val subjects = listOf(
             SubjectFactory.create("Project Management", "Agile methodologies, sprint cycles, and project planning.", "#007AFF", "1", now),
@@ -80,7 +162,7 @@ class UserRepository(
             SubjectFactory.create("English Proficiency", "Grammar, professional writing, and technical communication.", "#FF3B30", "4", now)
         )
         for (subject in subjects) {
-            batch.set(db.collection("subjects").document(subject.id), SubjectFactory.toDocument(subject))
+            batch.set(db.collection(SUBJECTS).document(subject.id), SubjectFactory.toDocument(subject))
         }
 
         val cards = listOf(
@@ -98,13 +180,56 @@ class UserRepository(
             FlashcardFactory.create("4", "Give an example of a transition word.", "Furthermore, However, Consequently, Moreover.", id = "12", createdAt = now)
         )
         for (card in cards) {
-            batch.set(db.collection("flashcards").document(card.id), FlashcardFactory.toDocument(card))
+            batch.set(db.collection(FLASHCARDS).document(card.id), FlashcardFactory.toDocument(card))
         }
 
         batch.commit().await()
     }
 
+    private suspend fun createAuthUser(email: String, password: String): String =
+        withSecondaryAuth { secondaryAuth ->
+            secondaryAuth.createUserWithEmailAndPassword(email, password).await().user?.uid
+                ?: error("Could not create the student account.")
+        }
+
+    /**
+     * Runs [block] against a temporary secondary FirebaseApp. The main app keeps
+     * the administrator signed in while another account is created.
+     */
+    private suspend fun withSecondaryAuth(block: suspend (FirebaseAuth) -> String): String =
+        secondaryAuthMutex.withLock {
+            val context = FirebaseApp.getInstance().applicationContext
+
+            // Clear an instance left behind by an interrupted previous run.
+            FirebaseApp.getApps(context)
+                .firstOrNull { it.name == SECONDARY_APP }
+                ?.delete()
+
+            val app = FirebaseApp.initializeApp(context, secondaryOptions(), SECONDARY_APP)
+                ?: error("Could not start the account service.")
+
+            try {
+                block(FirebaseAuth.getInstance(app))
+            } finally {
+                app.delete()
+            }
+        }
+
+    private fun secondaryOptions(): FirebaseOptions {
+        val primary = FirebaseApp.getInstance().options
+        val builder = FirebaseOptions.Builder()
+            .setApplicationId(primary.applicationId ?: error("Firebase applicationId is missing."))
+            .setApiKey(primary.apiKey ?: error("Firebase apiKey is missing."))
+        primary.projectId?.let { builder.setProjectId(it) }
+        primary.gcmSenderId?.let { builder.setGcmSenderId(it) }
+        primary.storageBucket?.let { builder.setStorageBucket(it) }
+        return builder.build()
+    }
+
     private companion object {
         const val COLLECTION = "users"
+        const val SUBJECTS = "subjects"
+        const val FLASHCARDS = "flashcards"
+        const val SECONDARY_APP = "flashiq-account-creator"
     }
 }

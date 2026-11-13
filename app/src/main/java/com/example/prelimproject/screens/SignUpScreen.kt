@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -27,6 +28,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,6 +46,7 @@ fun SignUpScreen(
     onNavigateToLogin: () -> Unit
 ) {
     var inputUser: String by remember { mutableStateOf("") }
+    var inputEmail: String by remember { mutableStateOf("") }
     var inputPass: String by remember { mutableStateOf("") }
     var errorMessage: String by remember { mutableStateOf("") }
     var isBusy: Boolean by remember { mutableStateOf(false) }
@@ -93,6 +97,24 @@ fun SignUpScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedTextField(
+                        value = inputEmail,
+                        onValueChange = { newValue ->
+                            inputEmail = newValue
+                            errorMessage = ""
+                        },
+                        label = { Text("Email") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Email,
+                            imeAction = ImeAction.Next
+                        ),
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
                         value = inputPass,
                         onValueChange = { newValue ->
                             inputPass = newValue
@@ -100,6 +122,10 @@ fun SignUpScreen(
                         },
                         label = { Text("Password") },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
                         visualTransformation = PasswordVisualTransformation(),
                         shape = MaterialTheme.shapes.large,
                         modifier = Modifier.fillMaxWidth()
@@ -124,14 +150,18 @@ fun SignUpScreen(
 
                     Button(
                         onClick = {
-                            if (inputUser == "" || inputPass == "") {
-                                errorMessage = "Please enter both fields"
+                            if (inputUser == "" || inputEmail == "" || inputPass == "") {
+                                errorMessage = "Please fill in all fields"
+                            } else if (!inputEmail.contains("@")) {
+                                errorMessage = "Enter a valid email address"
+                            } else if (inputPass.length < 6) {
+                                errorMessage = "Password must be at least 6 characters"
                             } else {
                                 isBusy = true
                                 errorMessage = ""
                                 scope.launch {
                                     try {
-                                        userViewModel.signUp(inputUser, inputPass)
+                                        userViewModel.signUp(inputUser, inputEmail, inputPass)
                                             .onSuccess { newStudent ->
                                                 onSignUpSuccess(newStudent)
                                             }

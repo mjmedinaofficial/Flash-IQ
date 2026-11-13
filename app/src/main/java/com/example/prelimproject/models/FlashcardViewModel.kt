@@ -11,7 +11,7 @@ class FlashcardViewModel(
 ) : ViewModel() {
 
     val flashcards: StateFlow<List<Flashcard>> =
-        repository.observeAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+        repository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     suspend fun save(card: Flashcard): Result<Unit> = runCatching {
         repository.save(card)
